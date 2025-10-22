@@ -1,0 +1,34 @@
+name: Nightly Repo Reset
+
+on:
+  schedule:
+    - cron: '0 3 * * *'   # Every day at 03:00 UTC
+  workflow_dispatch:       # Allow manual runs, too
+
+permissions:
+  contents: write          # Needed to push
+
+concurrency:
+  group: nightly-repo-reset
+  cancel-in-progress: true
+
+env:
+  # Change these if needed:
+  BASELINE_BRANCH: main    # The "clean" source of truth
+  TARGET_BRANCH: demo      # The branch you demo on (will be reset)
+
+jobs:
+  reset-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout baseline branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASELINE_BRANCH }}
+          fetch-depth: 0
+
+      - name: Force-push baseline onto target
+        run: |
+          git fetch origin $BASELINE_BRANCH --prune
+          # Push BASELINE_BRANCH's latest commit to TARGET_BRANCH, overwriting any changes
+          git push origin $BASELINE_BRANCH:$TARGET_BRANCH --force
