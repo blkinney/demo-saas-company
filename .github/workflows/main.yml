@@ -1,0 +1,72 @@
+name: Nightly Reset Main
+
+on:
+  schedule:
+    - cron: '0 3 * * *'   # Every day at 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-reset-main
+  cancel-in-progress: true
+
+env:
+  # ---- Configure these ----
+  TARGET_BRANCH: main           # Branch you demo on
+  BASELINE_REF: baseline        # Branch, tag, or commit SHA to reset to (e.g., 'baseline' or 'v1.0.0')
+  RESET_MODE: force            # 'commit' (safe, no force push) or 'force' (history rewrite)
+  # -------------------------
+
+jobs:
+  reset-main:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # we need full history for refs/tags
+
+      - name: Ensure baseline ref exists
+        run: |
+          set -euo pipefail
+          git fetch --tags --prune origin
+          if ! git rev-parse --verify --quiet "${BASELINE_REF}" >/dev/null; then
+            echo "Baseline ref '${BASELINE_REF}' not found. Set BASELINE_REF to a valid branch, tag, or commit SHA."
+            exit 1
+          fi
+          echo "Baseline ref resolves to: $(git rev-parse --short ${BASELINE_REF})"
+
+      - name: Ensure target branch exists locally
+        run: |
+          set -euo pipefail
+          if ! git show-ref --verify --quiet "refs/heads/${TARGET_BRANCH}"; then
+            git fetch origin "${TARGET_BRANCH}:${TARGET_BRANCH}"
+          fi
+
+      - name: Reset using selected mode
+        run: |
+          set -euo pipefail
+          # Make sure we're on TARGET_BRANCH and up to date
+          git checkout "${TARGET_BRANCH}"
+          git pull --ff-only origin "${TARGET_BRANCH}"
+
+          if [ "${RESET_MODE}" = "force" ]; then
+            echo "RESET_MODE=force: hard-resetting and force-pushing ${TARGET_BRANCH} to ${BASELINE_REF}"
+            git reset --hard "${BASELINE_REF}"
+            # ⚠️ Requires branch protection to allow force pushes
+            git push origin "${TARGET_BRANCH}" --force
+          else
+            echo "RESET_MODE=commit: making ${TARGET_BRANCH} tree identical to ${BASELINE_REF} via a normal commit"
+            # Replace index & worktree with baseline snapshot
+            git read-tree --reset -u "${BASELINE_REF}"
+            # If nothing changed, exit early
+            if git diff --quiet; then
+              echo "No differences from baseline; nothing to commit."
+              exit 0
+            fi
+            BASE_SHA="$(git rev-parse --short "${BASELINE_REF}")"
+            git commit -m "Nightly reset ${TARGET_BRANCH} to baseline (${BASELINE_REF}@${BASE_SHA})"
+            git push origin "${TARGET_BRANCH}"
+          fi
